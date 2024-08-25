@@ -120,7 +120,34 @@ def calculate_hash_digest(filepath: str):
     hexdigest = digest.hexdigest()
     return hexdigest
 
-def set_hashes(
+def _set_hash(
+    db: HashDatabase,
+    filepath: str,
+    verbose: bool = False,
+):
+    LOGVERBOSE = lambda msg: verbose and print_to_stderr_with_time(msg)
+    state = "CREATED"
+    abspath = os.path.abspath(filepath)
+    LOGVERBOSE("calculating hash for '{}'".format(abspath))
+    hexdigest = calculate_hash_digest(abspath)
+    if hexdigest is None:
+        LOGVERBOSE("failed to calculate hash of '{}'".format(abspath))
+        state = "FILEERR"
+        hexdigest = "-"*64
+    else:
+        LOGVERBOSE("'{}'={}".format(abspath, hexdigest))
+        row = db.get_hash_by_name(abspath)
+        if row is not None:
+            name, hash = row
+            state = "UPDATED" if hash != hexdigest else "NCHANGE"
+    if state not in ("NCHANGE", "FILEERR"):
+        LOGVERBOSE("storing hash of '{}'".format(abspath))
+        db.store_hash(abspath, hexdigest)
+    elif state == "NCHANGE":
+        LOGVERBOSE("hash unchanged, skipping '{}'".format(abspath))
+    return (state, hexdigest)
+
+def _set_hashes(
     filepaths: list,
     show_hashes: bool = False,
     show_absolute_paths: bool = False,
@@ -131,40 +158,10 @@ def set_hashes(
     if verbose:
         print_to_stderr_with_time("opening hash database")
     db = HashDatabase()
+    result = []
     for fp in filepaths:
         abspath = os.path.abspath(fp)
-        if verbose:
-            print_to_stderr_with_time(
-                "calculating hash for '{}'".format(abspath)
-            )
-        state = "CREATED"
-        hexdigest = calculate_hash_digest(fp)
-        if hexdigest is None:
-            state = "FILEERR"
-            hexdigest = "-"*64
-            if verbose:
-                print_to_stderr_with_time(
-                    "failed to calculate hash of '{}'".format(abspath)
-                )
-        else:
-            if verbose:
-                print_to_stderr_with_time(
-                    "'{}'={}".format(abspath, hexdigest)
-                )
-            row = db.get_hash_by_name(abspath)
-            if row is not None:
-                name, hash = row
-                state = "UPDATED" if hash != hexdigest else "NCHANGE"
-        if state not in ("NCHANGE", "FILEERR"):
-            if verbose:
-                print_to_stderr_with_time(
-                    "storing hash of '{}'".format(abspath)
-                )
-            db.store_hash(abspath, hexdigest)
-        elif state == "NCHANGE" and verbose:
-            print_to_stderr_with_time(
-                "hash unchanged, skipping '{}'".format(abspath)
-            )
+        state, hexdigest = _set_hash(db, abspath, verbose)
         path_to_display = abspath if show_absolute_paths else fp
         if (
             not silent
@@ -174,8 +171,33 @@ def set_hashes(
                 print("{} {} {}".format(state, hexdigest, path_to_display))
             else:
                 print("{} {}".format(state, path_to_display))
+        result.append((state, hexdigest, abspath))
+    return result
 
-def get_hashes(
+def set_hashes(filepaths: list):
+    return _set_hashes(filepaths, silent=True, verbose=False)
+
+def _get_hash(
+    db: HashDatabase,
+    filepath: str,
+    verbose: bool = False,
+):
+    LOGVERBOSE = lambda msg: verbose and print_to_stderr_with_time(msg)
+    abspath = os.path.abspath(filepath)
+    LOGVERBOSE("calculating hash for '{}'".format(abspath))
+    hexdigest = calculate_hash_digest(abspath)
+    if hexdigest is None:
+        LOGVERBOSE("failed to calculate hash of '{}'".format(abspath))
+        state = "ERR"
+        hexdigest = "-"*64
+        hashes = []
+    else:
+        LOGVERBOSE("'{}'={}".format(abspath, hexdigest))
+        hashes = db.get_hashes(hexdigest)
+        state = "HIT" if hashes else "N/A"
+    return (state, hexdigest, hashes)
+
+def _get_hashes(
     filepaths: list,
     show_hashes: bool = False,
     show_absolute_paths: bool = False,
@@ -186,28 +208,10 @@ def get_hashes(
     if verbose:
         print_to_stderr_with_time("opening hash database")
     db = HashDatabase()
+    result = []
     for fp in filepaths:
         abspath = os.path.abspath(fp)
-        if verbose:
-            print_to_stderr_with_time(
-                "calculating hash for '{}'".format(abspath)
-            )
-        hexdigest = calculate_hash_digest(fp)
-        if hexdigest is None:
-            state = "ERR"
-            hexdigest = "-"*64
-            if verbose:
-                print_to_stderr_with_time(
-                    "failed to calculate hash of '{}'".format(abspath)
-                )
-            hashes = []
-        else:
-            if verbose:
-                print_to_stderr_with_time(
-                    "'{}'={}".format(abspath, hexdigest)
-                )
-            hashes = db.get_hashes(hexdigest)
-            state = "HIT" if hashes else "N/A"
+        state, hexdigest, hashes = _get_hash(db, abspath, verbose)
         src_path_to_display = abspath if show_absolute_paths else fp
         dst_path_to_display = ",".join([r[0] for r in hashes])
         if dst_path_to_display:
@@ -229,8 +233,31 @@ def get_hashes(
                     src_path_to_display,
                     dst_path_to_display,
                 ))
+        result.append((state, hexdigest, abspath, [r[0] for r in hashes]))
+    return result
 
-def unset_hashes(
+def get_hashes(filepaths: list):
+    return _get_hashes(filepaths, silent=True, verbose=False)
+
+def _unset_hash(
+    db: HashDatabase,
+    filepath: str,
+    verbose: bool = False,
+):
+    LOGVERBOSE = lambda msg: verbose and print_to_stderr_with_time(msg)
+    abspath = os.path.abspath(filepath)
+    row = db.get_hash_by_name(abspath)
+    name, hash = "", "-"*64
+    if row is not None:
+        name, hash = row
+        LOGVERBOSE("deleting hash of '{}'".format(abspath))
+        db.delete_by_name(abspath)
+    else:
+        LOGVERBOSE("hash not found, skipping '{}'".format(abspath))
+    state = "DELETED" if row is not None else "NOENTRY"
+    return (state, hash, name)
+
+def _unset_hashes(
     filepaths: list,
     show_hashes: bool = False,
     show_absolute_paths: bool = False,
@@ -241,45 +268,40 @@ def unset_hashes(
     if verbose:
         print_to_stderr_with_time("opening hash database")
     db = HashDatabase()
+    result = []
     for fp in filepaths:
         abspath = os.path.abspath(fp)
-        row = db.get_hash_by_name(abspath)
-        name, hash = "", "-"*64
-        if row is not None:
-            name, hash = row
-            if verbose:
-                print_to_stderr_with_time(
-                    "deleting hash of '{}'".format(abspath)
-                )
-            db.delete_by_name(abspath)
-        elif verbose:
-            print_to_stderr_with_time(
-                "hash not found, skipping '{}'".format(abspath)
-            )
-        state = "DELETED" if row is not None else "NOENTRY"
+        state, hash, name = _unset_hash(db, abspath, verbose)
         path_to_display = abspath if show_absolute_paths else fp
         if not silent and (show_all or state == "DELETED"):
             if show_hashes:
                 print("{} {} {}".format(state, hash, path_to_display))
             else:
                 print("{} {}".format(state, path_to_display))
+        result.append((state, hash, abspath))
+    return result
 
-def clear_hashes(
+def unset_hashes(filepaths: list):
+    return _unset_hashes(filepaths, silent=True, verbose=False)
+
+def _clear_hashes(
     filepaths: list,
     silent: bool = False,
     verbose: bool = False,
 ):
-    if verbose:
-        print_to_stderr_with_time("opening hash database")
+    LOGVERBOSE = lambda msg: verbose and print_to_stderr_with_time(msg)
+    LOGVERBOSE("opening hash database")
     db = HashDatabase()
-    if verbose:
-        print_to_stderr_with_time("querying row counts of 'hashes' table")
+    LOGVERBOSE("querying row counts of 'hashes' table")
     count = db.get_number_of_hashes()
-    if verbose:
-        print_to_stderr_with_time("deleting everything in 'hashes' table")
+    LOGVERBOSE("deleting everything in 'hashes' table")
     db.delete_all()
     if not silent:
         print("Successfully deleted {} entries.".format(count))
+    return count
+
+def clear_hashes(filepaths: list):
+    return _clear_hashes(filepaths, silent=True, verbose=False)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -334,6 +356,12 @@ def main():
         )
     )
     parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="recursively choose files below directories"
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -341,7 +369,7 @@ def main():
     )
     arguments = parser.parse_args()
     if arguments.action in ("s", "set"):
-        set_hashes(
+        _set_hashes(
             arguments.files,
             arguments.show_hashes,
             arguments.show_absolute_paths,
@@ -350,7 +378,7 @@ def main():
             arguments.verbose,
         )
     elif arguments.action in ("g", "get"):
-        get_hashes(
+        _get_hashes(
             arguments.files,
             arguments.show_hashes,
             arguments.show_absolute_paths,
@@ -359,7 +387,7 @@ def main():
             arguments.verbose,
         )
     elif arguments.action in ("u", "unset"):
-        unset_hashes(
+        _unset_hashes(
             arguments.files,
             arguments.show_hashes,
             arguments.show_absolute_paths,
@@ -368,7 +396,7 @@ def main():
             arguments.verbose,
         )
     elif arguments.action in ("c", "clear"):
-        clear_hashes(
+        _clear_hashes(
             arguments.files,
             arguments.silent,
             arguments.verbose,
