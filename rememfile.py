@@ -1,6 +1,7 @@
 #! /usr/bin/python3
 
 import sys
+import os
 import os.path
 import sqlite3
 import hashlib
@@ -108,6 +109,8 @@ def print_to_stderr_with_time(msg: str):
     print("[{}] {}".format(datetime.now(), msg), file=sys.stderr)
 
 def calculate_hash_digest(filepath: str):
+    if not os.path.isfile(filepath):
+        return None
     digest = hashlib.sha256()
     try:
         with open(filepath, "rb") as f:
@@ -152,6 +155,7 @@ def _set_hashes(
     show_hashes: bool = False,
     show_absolute_paths: bool = False,
     show_all: bool = False,
+    recursive: bool = False,
     silent: bool = False,
     verbose: bool = False,
 ):
@@ -159,10 +163,10 @@ def _set_hashes(
         print_to_stderr_with_time("opening hash database")
     db = HashDatabase()
     result = []
-    for fp in filepaths:
-        abspath = os.path.abspath(fp)
+    def process_one_file(filepath):
+        abspath = os.path.abspath(filepath)
         state, hexdigest = _set_hash(db, abspath, verbose)
-        path_to_display = abspath if show_absolute_paths else fp
+        path_to_display = abspath if show_absolute_paths else filepath
         if (
             not silent
             and (show_all or state in ("CREATED", "UPDATED", "FILEERR"))
@@ -172,6 +176,13 @@ def _set_hashes(
             else:
                 print("{} {}".format(state, path_to_display))
         result.append((state, hexdigest, abspath))
+    for fp in filepaths:
+        if recursive and os.path.isdir(fp):
+            for root, dirs, files in os.walk(fp):
+                for fp_r in files:
+                    process_one_file(os.path.join(root, fp_r))
+        else:
+            process_one_file(fp)
     return result
 
 def set_hashes(filepaths: list):
@@ -202,6 +213,7 @@ def _get_hashes(
     show_hashes: bool = False,
     show_absolute_paths: bool = False,
     show_all: bool = False,
+    recursive: bool = False,
     silent: bool = False,
     verbose: bool = False,
 ):
@@ -209,10 +221,10 @@ def _get_hashes(
         print_to_stderr_with_time("opening hash database")
     db = HashDatabase()
     result = []
-    for fp in filepaths:
-        abspath = os.path.abspath(fp)
+    def process_one_file(filepath):
+        abspath = os.path.abspath(filepath)
         state, hexdigest, hashes = _get_hash(db, abspath, verbose)
-        src_path_to_display = abspath if show_absolute_paths else fp
+        src_path_to_display = abspath if show_absolute_paths else filepath
         dst_path_to_display = ",".join([r[0] for r in hashes])
         if dst_path_to_display:
             dst_path_to_display = "-> " + dst_path_to_display
@@ -234,6 +246,13 @@ def _get_hashes(
                     dst_path_to_display,
                 ))
         result.append((state, hexdigest, abspath, [r[0] for r in hashes]))
+    for fp in filepaths:
+        if recursive and os.path.isdir(fp):
+            for root, dirs, files in os.walk(fp):
+                for fp_r in files:
+                    process_one_file(os.path.join(root, fp_r))
+        else:
+            process_one_file(fp)
     return result
 
 def get_hashes(filepaths: list):
@@ -262,6 +281,7 @@ def _unset_hashes(
     show_hashes: bool = False,
     show_absolute_paths: bool = False,
     show_all: bool = False,
+    recursive: bool = False,
     silent: bool = False,
     verbose: bool = False,
 ):
@@ -269,16 +289,23 @@ def _unset_hashes(
         print_to_stderr_with_time("opening hash database")
     db = HashDatabase()
     result = []
-    for fp in filepaths:
-        abspath = os.path.abspath(fp)
+    def process_one_file(filepath):
+        abspath = os.path.abspath(filepath)
         state, hash, name = _unset_hash(db, abspath, verbose)
-        path_to_display = abspath if show_absolute_paths else fp
+        path_to_display = abspath if show_absolute_paths else filepath
         if not silent and (show_all or state == "DELETED"):
             if show_hashes:
                 print("{} {} {}".format(state, hash, path_to_display))
             else:
                 print("{} {}".format(state, path_to_display))
         result.append((state, hash, abspath))
+    for fp in filepaths:
+        if recursive and os.path.isdir(fp):
+            for root, dirs, files in os.walk(fp):
+                for fp_r in files:
+                    process_one_file(os.path.join(root, fp_r))
+        else:
+            process_one_file(fp)
     return result
 
 def unset_hashes(filepaths: list):
@@ -308,6 +335,11 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter,
         description=(
             "Remember the files at specific paths and compare them later."
+        ),
+        epilog=(
+            "Please note that the current version only stores hashes of "
+            "regular files,\nwhile special files, such as device files, "
+            "are ignored."
         )
     )
     parser.add_argument(
@@ -359,7 +391,10 @@ def main():
         "-r",
         "--recursive",
         action="store_true",
-        help="recursively choose files below directories"
+        help=(
+            "recursively select files within directories (does not follow "
+            "symlinks to directories)"
+        )
     )
     parser.add_argument(
         "-v",
@@ -374,6 +409,7 @@ def main():
             arguments.show_hashes,
             arguments.show_absolute_paths,
             arguments.show_all,
+            arguments.recursive,
             arguments.silent,
             arguments.verbose,
         )
@@ -383,6 +419,7 @@ def main():
             arguments.show_hashes,
             arguments.show_absolute_paths,
             arguments.show_all,
+            arguments.recursive,
             arguments.silent,
             arguments.verbose,
         )
@@ -392,6 +429,7 @@ def main():
             arguments.show_hashes,
             arguments.show_absolute_paths,
             arguments.show_all,
+            arguments.recursive,
             arguments.silent,
             arguments.verbose,
         )
