@@ -670,8 +670,33 @@ def _combine(
         ))
     return result_rows
 
+class _AliasDedupingArgumentParser(argparse.ArgumentParser):
+    """
+    Subparser "invalid choice" errors list every registered name, aliases
+    included (e.g. 'set', 's', 'get', 'g', ...). This collapses each group
+    of aliases down to the canonical name they were registered under.
+    """
+    def _check_value(self, action, value):
+        if action.choices is None or value in action.choices:
+            return super()._check_value(action, value)
+        choices = action.choices
+        if isinstance(choices, dict):
+            seen_parsers = set()
+            names = []
+            for name, subparser in choices.items():
+                if id(subparser) not in seen_parsers:
+                    seen_parsers.add(id(subparser))
+                    names.append(name)
+            choices_repr = ", ".join(repr(name) for name in names)
+        else:
+            choices_repr = ", ".join(repr(choice) for choice in choices)
+        raise argparse.ArgumentError(
+            action,
+            "invalid choice: {!r} (choose from {})".format(value, choices_repr)
+        )
+
 def main():
-    parser = argparse.ArgumentParser(
+    parser = _AliasDedupingArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter,
         description=(
             "Remember the files at specific paths and compare them later."
