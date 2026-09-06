@@ -73,8 +73,9 @@ class HashDatabase:
         cursor.execute("""
             SELECT name, hash FROM hashes
         """)
+        result = cursor.fetchall()
         cursor.close()
-        self.db.commit()
+        return result
 
     def get_hashes(self, hash):
         cursor = self.db.cursor()
